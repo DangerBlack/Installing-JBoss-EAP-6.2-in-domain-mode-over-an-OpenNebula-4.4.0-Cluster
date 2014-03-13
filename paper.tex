@@ -1,0 +1,980 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[english]{babel}
+\usepackage[utf8x]{inputenc}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[colorinlistoftodos]{todonotes}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{fullpage}
+\usepackage{placeins}
+
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\lstset{frame=tb,
+  language=Bash,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true
+  tabsize=3
+}
+
+
+\title{Installing JBoss EAP 6.2 in domain mode over an OpenNebula 4.4.0 Cluster}
+
+\author{Daniele Baschieri, Gianluca Iselli, Matteo Martelli,\\ Davide Berardi, Giulio Biagini}
+
+\date{\today}
+
+
+\begin{document}
+\maketitle
+
+
+Copyright (C)  2014  Daniele Baschieri, Gianluca Iselli, Matteo Martelli,Davide Berardi, Giulio Biagini.
+    Permission is granted to copy, distribute and/or modify this document
+    under the terms of the GNU Free Documentation License, Version 1.3
+    or any later version published by the Free Software Foundation;
+    with no Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
+    A copy of the license is included in the section entitled "GNU
+    Free Documentation License".
+
+\newpage
+\tableofcontents
+\listoffigures
+\newpage
+
+\section{Introduction}
+
+The aim of this tutorial is to teach you how to properly install a JBoss EAP cluster over several VMs handled by OpenNebula.  \\
+Every part of this software needs to be very well configured in order to work properly. Thus we wanted to write down every single step we faced.
+\subsection{Status of this document}
+This document has been written by many authors while working on the configuration. Therefore it can result messy and grammatically incorrect. We will try to review this document as best we can. By the way the future readers/authors of this document that want to help us are more than welcome. The \LaTeX source code of this document is stored at \url{https://www.writelatex.com/702523kffcns} .
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=1\textwidth]{preview.png}
+\caption{\label{fig:preview} The final cluster configuration.}
+\end{figure}
+
+\subsection{OpenNebula}
+OpenNebula orchestrates storage, network, virtualization, monitoring, and security technologies to deploy multi-tier services (e.g. compute clusters) as virtual machines on distributed infrastructures, combining both data center resources and remote cloud resources, according to allocation policies.
+The toolkit includes features for integration, management, scalability, security and accounting. It also claims standardization, interoperability and portability, providing cloud users and administrators with a choice of several cloud interfaces (Amazon EC2 Query, OGF Open Cloud Computing Interface and vCloud) and hypervisors (Xen, KVM and VMware), and can accommodate multiple hardware and software combinations in a data center.\cite{OpenNebulaInfo}
+\subsection{JBoss}
+WildFly, formerly known as JBoss AS, or simply JBoss, is an application server authored by JBoss, now developed by Red Hat. WildFly is written in Java and is executable on top of the Java Platform, Enterprise Edition (Java EE), which is available cross-platform.
+WildFly is free and open-source software, subject to the requirements of the GNU Lesser General Public License (LGPL), version 2.1.
+The renaming to WildFly was done to reduce confusion. The renaming only affects the JBoss Application Server project. The JBoss Community or the Red Hat JBoss product line (with JBoss Enterprise Application Platform) all retain their names.\cite{JBossInfo}
+\FloatBarrier
+
+
+\subsection{Fault Tollerance - Load Balancing}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=1\textwidth]{jboss_fault_tollerance.png}
+\caption{\label{fig:fault tollerance} The amazing part about fault tollerance in cloud.}
+\end{figure}
+This middelware keeps working even if one of the real machine falls. This happens  because there are several JBoss server instances on the top of different physical machines. Therefore if one machine crashes the other one keep responding to the clients HTTP requests. The Figure \ref{fig:fault tollerance} explains this behaviour.\\
+In our configuration, the JBoss Domain Controller machine should be protected in some other way because the JBoss domain pattern does not provide any fault tolerance policy in the case that the Domain Controller falls.\\
+The OpenNebula Front-End machine is needed just to deploy and monitor the VMs but there is no fault risk if it crashes after the VM deployment phase (if there isn't any VM deployed on the Front-End host).\\
+In this tutorial we did not replicate the nfs file system, thus if the machine that hosts the file system falls, the middleware won't work anymore.\\
+We also wanted to figure a scenario where a lot of VMs are deployed on just one host. In this case you can migrate one of them to another host.\\
+JBoss itself provides some load balancing feature on an upper level.
+\FloatBarrier
+
+\section{Set up the Software}
+
+
+\subsection{Installing Debian}
+First of all you have to install Debian on all of your hosts.
+
+You can find the iso here: \url{http://cdimage.debian.org/debian-cd/7.3.0/amd64/iso-dvd/debian-7.3.0-amd64-DVD-1.iso}
+
+We skip the debian installation part as it's already a well documented procedure.
+
+\subsection{Installing OpenNebula}
+
+We followed the procedure explained in the url below but we changed some step in order to get a working OpenNebula installation.\cite{OpenNebulaOfficial}
+\url{http://docs.opennebula.org/stable/design_and_installation/building_your_cloud/ignc.html}
+
+\subsubsection{Installing the Core}
+The following steps must be done in both the Fron-End host and the Worker Node hosts.
+Install the dipendecies first:
+\begin{lstlisting}
+$ sudo apt-get install ruby1.9.1-full
+$ sudo apt-get install gem
+$ sudo gem install json
+$ sudo mv /usr/lib/ruby/1.9.1/json.rb /usr/lib/ruby/1.9.1/json.rb.no
+\end{lstlisting}
+
+Add the OpenNebula repository:
+\begin{lstlisting}
+# wget http://downloads.opennebula.org/repo/Debian/repo.key
+# apt-key add repo.key
+# echo "deb http://downloads.opennebula.org/repo/Debian/7 stable opennebula" > /etc/apt/sources.list.d/opennebula.list
+\end{lstlisting}
+
+\subsubsection{Front-End Side}
+The following steps must be done on the Front-End host.
+Update the packages list and install OpenNebula.
+\begin{lstlisting}
+# apt-get update
+# apt-get install opennebula opennebula-sunstone
+\end{lstlisting}
+
+Install nfs service
+\begin{lstlisting}
+$ sudo apt-get install nfs-kernel-server portmap nfs-common
+\end{lstlisting}
+
+Configure the oneadmin account. The password choosen in the first command must be the same of password choosed in the fourth one (unstead of "password").
+\begin{lstlisting}
+$ sudo passwd oneadmin
+$ su oneadmin
+$ mkdir ~/.one
+$ echo "oneadmin:password" > ~/.one/one_auth
+$ chmod 600 ~/.one/one_auth
+\end{lstlisting}
+
+After than you have to make the md5 of your password and insert it in the sunstone\_auth file.
+
+The md5 of pippo is 0c88028bf3aa6a6a143ed846f2be1ea4.
+
+\begin{lstlisting}
+# echo oneadmin:0c88028bf3aa6a6a143ed846f2be1ea4 > ~/.one/sunstone_auth
+\end{lstlisting}
+
+Restart OpenNebula.
+
+\begin{lstlisting}
+rm ~/one.db
+$ one start
+$ sunstone-server start
+$ onevm list
+\end{lstlisting}
+
+The last command just shows the OpenNebula VMs status.
+Now open a browser and navigate to \url{localhost:9869}. The sunstone web interface should be accessible.  
+
+\subsubsection{Worker-Node Side}
+
+Install OpenNebula node software.
+
+\begin{lstlisting}
+$ sudo apt-get install opennebula-node
+# sudo su
+# passwd oneadmin
+\end{lstlisting}
+\subsubsection{Both Side - oneadmin user configuration}
+
+You have to find the oneadmin uid in all of your hosts. Then change them in order to have the same uid in all of your hosts.
+
+\begin{lstlisting}
+# id oneadmin
+\end{lstlisting}
+
+For example if the user oneadmin has uid 9869 and the group oneadmin (or cloud) has the gid 9869 in the Front-End host, you can use the following command in all of the worker node to have the same uid,gid assignment. 
+\begin{lstlisting}
+# usermod -u UID username  //change uid for an user
+# usermod -u 9869 oneadmin
+# groupmod -u 9869 oneadmin //change group for an user
+# usermod -g oneadmin oneadmin 
+\end{lstlisting}
+
+Check that the uid choosen is free on the host you are going to modify:
+\begin{lstlisting}
+# cat /etc/passwd | grep UID
+\end{lstlisting}
+
+Now for each node you have to create the ssh keys to avoid the password autentication. In this way OpenNebula can connect to a machine automatically.
+In all of your hosts run:
+\begin{lstlisting}
+$ su oneadmin
+$ ssh-keygen
+\end{lstlisting}
+Then in the Front-End $.ssh/authorized\_keys$ file, past all the public keys of all the hosts, of the Front-End itself too ($.ssh/id\_rsa.pub$). 
+
+\subsubsection{Front-End Side - datastore}
+%TODO
+Now install the datastore from the sunston web interface.
+
+In the browser go to http://localhost:9869. Login with the oneadmin user and password. Then go to the Infrastracture/Datastore section and select
+Create\\
+Use this configuration\\
+type: System\\
+nome: WhatYouWant\\
+Trasfer: shared\\
+leave the other options unchanged.
+
+You need to create the hosts and the virutal network.
+Create the hosts under the Infrastructure/Hosts section.
+Then under the Infrastructure/Virtual Networks section create a new network. Insert the bridge name in the corrisponding field, then select "fixed network" and add three ip address (leave the MAC address fields empty):
+\begin{lstlisting}
+10.0.0.100
+10.0.0.101
+10.0.0.102
+\end{lstlisting}
+You can leave the other fields empty.
+After that open Sunstone and inside Cluster
+Create\\
+host
+select the default datastore plus the one just created.
+
+To share the datastore directory with all Worker Nodes you need to edit the /etc/exports file adding that line:
+\begin{lstlisting}
+/var/lib/one/datastores  		 *(rw,sync,no_subtree_check)
+\end{lstlisting}
+
+And now you can start the nfs service with:
+\begin{lstlisting}
+$ sudo /etc/init.d/nfs-common start
+$ sudo /etc/init.d/nfs-kernel-server start
+\end{lstlisting}
+
+\subsubsection{Both Side - network configuration}
+Now both the Front-End hosts and the Worker Node hosts must perform the following steps:
+Configuring the Bridge
+
+\begin{lstlisting}
+$ sudo su
+# brctl addbr smbr0
+# brctl show
+# brctl addif smbr0 eth0
+# ifconfig smbr0 10.0.0.N netmask 255.0.0.0 //Instead of N use a progressive number,  for the Front-End, 2 for the Worker Node
+ # ip addr
+ ping 10.0.0.1 // to check if it works
+\end{lstlisting}
+
+NB this command must be done every time you want to configure the network, so it can be useful making a bash script bash.
+
+On the Front-End host open the "Marketplace" from the sunstone web interface\\
+Select ttlinux-kvm.\\
+Now select import.\\
+You had to chose the default datastore.\\
+
+Initialize the Virtual Resource Template\\
+Open the Section Virtual Resource / Template
+Create\\
+Leave all the default option\\
+Open the advanced mode\\
+Paste this configuration\\
+\begin{lstlisting}
+CONTEXT=[NETWORK="YES",SSH_PUBLIC_KEY="$USER[SSH_PUBLIC_KEY]"]
+CPU="1"
+DISK=[IMAGE="ttylinux - kvm",IMAGE_UNAME="oneadmin"]
+GRAPHICS=[LISTEN="0.0.0.0",TYPE="VNC"]
+HOST_0="0"
+HOST_1="1"
+MEMORY="512"
+NIC=[NETWORK="SM-network",NETWORK_UNAME="oneadmin"]
+\end{lstlisting}
+Now select instantiate.
+
+
+\subsubsection{Worker-node section}
+
+\begin{lstlisting}
+$ sudo mount -tnfs4 10.0.0.1:/var/lib/one/datastores /var/lib/one/datastores
+\end{lstlisting}
+
+NB this command must be done every time after the physical machine reboot, so it can be useful making a bash script.
+
+\subsubsection{Front-End Migrating of virtual machine}
+Now open sunstone in the Template section, then select Instantiate as in Figure \ref{fig:sunstone instantiate}.
+\begin{figure}[ht]
+\centering
+\includegraphics[width=1\textwidth]{sunstone_instantiate.png}
+\caption{\label{fig:sunstone instantiate} The Template section of OpenNebula Sunstone.}
+\end{figure}
+
+Choose a name for the virtual machine (optional) 
+
+Log in as oneadmin and do ssh to the virtual machine just created.
+\begin{lstlisting}
+$ su oneadmin
+$ ssh root@10.0.0.100 //password is "password" by default
+\end{lstlisting}
+
+In the VM just run a program like ping, or yes or something that stays active in the terminal during the migration process.
+\begin{lstlisting}
+$ watch -n 1 date
+\end{lstlisting}
+
+Now open the Sunstone interface and select Migrate Live from the drop down menu as in Figure \ref{fig:sunstone migrate}.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=1\textwidth]{sunstone_migrate.png}
+\caption{\label{fig:sunstone migrate} The Virtual Machines section of the OpenNebula Sunstone interface.}
+\end{figure}
+
+Select now the host where you want to send the Virtual Machine.
+NB you have to manually update the Sunstone interface by clicking the update button.
+
+
+\subsection{Installing Debian 7.3.0 on Virtual Machine}
+Download Debian 7.3.0 netinst from the mirror like \url{http://cdimage.debian.org/debian-cd/7.3.0/i386/iso-cd/debian-7.3.0-i386-netinst.iso}
+
+In Sunstone open the section Virtual Resources/Images\\
+then Create two images.\\
+One for the iso as type:CDROM using the netinst (upload browse and select the netinst).\\
+The other one for the HD, using type:DATABLOCK with empty datablock for the installation.
+In the Template Section, create a new tempalte for the debian VMs. Assign then two disk to the template under the Storage tab. One of them with the iso netinst disk and the other one with the empty datablock image just created. Assign the 10.0.0.100 to the template too.
+Instantiate a machine with this Template and finally install Debian as usual.
+N.B. the keyboard configuration must be choosen during the OS installation.
+
+\subsubsection{iptables rules}
+The following iptables rules are necessary in order to let the VM connect with the internet.
+The commands below must be run in your phisical machine.
+\begin{lstlisting}
+# echo 1 > /proc/sys/net/ipv4/ip_forward
+# iptables -t nat -A POSTROUTING -o <OUTPUT INTERFACE(ex: wlan0)> -j MASQUERADE
+# iptables -A FORWARD -i smbr0 -j ACCEPT
+\end{lstlisting}
+
+Now inside the VM, you have to run these commands. In this way we can assign an ip address of your subnet to the VM.
+\begin{lstlisting}
+# ip addr add 10.0.0.100/8 dev eth0
+# ip link set eth0 up
+# route add default gw 10.0.0.1 
+# hostname master
+# echo "nameserver 8.8.8.8" > /etc/resolv.conf
+\end{lstlisting}
+Add the first three commands in the /etc/rc.local file in order to have always the same ip and hostname after the VM boot.
+
+\subsubsection{Set up the machine for JBOSS}
+Now check if internet is working in the VM, and then add some repository and install some tool.
+
+\begin{lstlisting}
+nano /etc/apt/sources.list
+deb http://ftp.debian.org/debian/ unstable main non-free contrib
+deb-src http://ftp.debian.org/debian/ unstable main non-free contrib
+# main repository
+deb http://repo.mate-desktop.org/debian jessie main
+# apt-get install openssh-server
+# apt-get update
+# apt-get install unzip
+# apt-get install zip
+# apt-get install openjdk-7-jre
+\end{lstlisting}
+
+\subsection{Installing JBOSS}
+Download JBoss here \url{https://www.jboss.org/products/eap.html} and install it following the point 4.3 in this guide.\cite{JBossGuide}
+\url{https://access.redhat.com/site/documentation/en-US/JBoss_Enterprise_Application_Platform/6/pdf/Installation_Guide/JBoss_Enterprise_Application_Platform-6-Installation_Guide-en-US.pdf}
+
+\subsubsection{Installing modcluster}
+Now install the load balancer Mod Cluster.\\
+Donwload the resource from here \url{http://downloads.jboss.org/mod_cluster//1.2.6.Final/linux-i686/mod_cluster-1.2.6.Final-linux2-x86.tar.gz}\\
+
+Now you need to choose how many slave you want in your cluster because it's time to add their ips in /etc/hosts file like this:
+\begin{lstlisting}
+10.0.0.100	master
+10.0.0.101	slave1
+10.0.0.102	slave2
+\end{lstlisting}
+NB you can add more server when you want.
+
+Now follow this guide to install modcluster.\cite{ModClusterGuide} \url{http://docs.jboss.org/mod_cluster/1.2.0/html/Quick_Start_Guide.html}\\
+NB in section 2 form 2.3 to the end of the guide you have to use the ip of the vm in use instead 10.33.144.3
+
+Add the following line to the /etc/rc.local in order to start httpd at boot
+\begin{lstlisting}
+/opt/jboss/httpd/sbin/apachectl start
+\end{lstlisting}
+
+At this point you should clone the VM using the sunstone web interface. The clone option is under Virtual Resources/Images. Clone the disk image of the master and create a new template (cloning the template too). Assign to the new template the just cloned image and 10.0.0.101 as the ip address.
+Assign the "master" and "slave1" names to the 2 VMs and 1GB of RAM at least (also with the sunstone web interface).
+Inside the slave2 VM change the ip assigment (to 10.0.0.101) and the hostname (slave1) in the /etc/rc.local file and reboot.
+You must set now the hosts, thus in each VM modify the /etc/hosts adding the same configuration:
+10.0.0.100    master
+10.0.0.101    slave1
+10.0.0.102	  slave2
+
+We have also added the slave2 host because we will clone the slave1 VM later.
+
+We are going to explain how to create a Domain configuration with jboss. You will have thre VM at the end, where one of them is the the Domain Control (the master host) and the others are the Member Hosts of the domain (slave1 and slave2). In this demo we left the Domain Controller without servers and then we added one server to each host. Thus the domain controller act only as single point of access and  load balancer, handling the requests workload beetween the two servers.
+
+With EAP-HOME we refer to the jboss installation home directory. Now let's proceed with the jboss configuration.
+In the master VM you must add three users, one user for accessing through the web interface, and 2 users for the hosts. Just use the jboss add-user.sh script. 
+\begin{lstlisting}
+$ EAP-HOME/bin/add-user.sh
+\end{lstlisting}
+Follow the indications on the interactive shell, and add an user with the name "admin" and then with the same command add two other users one named "slave1" and one named "slave2" (yes, you MUST add the same name of the hostname!!).
+At the end of the script execution a Base64 password inside a \textless secret\textgreater \ tag will be prompted. Save it, you will use it later. You have to modify the slaves host.xml file (the file is at EAP-HOME/domain/configuration/host.xml).
+Follow the steps at this url \url{https://access.redhat.com/site/solutions/218053} to understand how to configure it. Just skip the user creation step (you have already done it). When it refers to the Base64 secret, use the slaves secret saved before.
+You can now run jboss. In the master run the following command:
+\begin{lstlisting}
+$ EAP-HOME/bin/domain.sh -b 10.0.0.100 -Djboss.bind.address.management=10.0.0.100
+\end{lstlisting}
+And in the slave1:
+\begin{lstlisting}
+$ EAP-HOME/bin/domain.sh -b 10.0.0.101  -Djboss.domain.master.address=10.0.0.100 -Djboss.bind.address.management=10.0.0.101
+\end{lstlisting}
+If you have the "HORNETQ.CLUSTER.ADMIN.USER" authentication error you should disable the cluster authentication in the EAP-HOME/domain/configuration/domain.xml file. To do this just add the $<security-enabled>false</security-enabled>$ tag in this way:
+\begin{lstlisting}
+<subsystem xmlns="urn:jboss:domain:messaging:1.3">
+     <hornetq-server>
+		...    
+        <security-enabled>false</security-enabled>
+    	...
+    </hornetq-server>
+</subsystem>
+\end{lstlisting}
+
+
+Now you should have a working domain configuration with two jboss instances. At this point you just need to clone the slave1 VM disk image using the opennebula sunstone interface, create a new template, with the 10.0.0.102 ip address and the just created image. Give it then the "slave2" name. Now you can deploy a slave VM too. In the slave2 VM change the ip to 10.0.0.102 and the hostname to slave2 under /etc/rc.local. Now you just have to modify the host.xml file changing the name to slave2. Now you can modify the whole servers and groups configuration through the Jboss Management browser interface accessing with the admin user at http://10.0.0.100:9990 . In the hosts section you can configure the number of groups and the servers for each host. In our configuration we left the domain controller withouth server, and we assigned "server-one" to slave1 under the other-server-group and "server-two" to slave2 also under the other-server-group. Check that the server-group has the full-ha profile and the full-ha-sockets (should be as this by default).
+
+
+\subsubsection{Distribuited filesystem on VMs in order to make statefull applications}
+
+Install nfs server in the master server:
+\begin{lstlisting}
+$ sudo apt-get install nfs-kernel-server portmap nfs-common
+\end{lstlisting}
+and in /etc/rc.local add the following commands
+
+\begin{lstlisting}
+/etc/init.d/nfs-common start
+/etc/init.d/nfs-kernel-server start
+\end{lstlisting}
+
+To share data between slave servers you need to modify the /etc/exports file adding the shared directory. The file is located in the master server.
+\begin{lstlisting}
+/home/USERNAME/EAP-HOME/bin/data/  *(rw,sync,no_subtree_check)
+\end{lstlisting}
+
+
+For instance in EAP-HOME/bin/ of slaves servers I have created a new directory called 'data'. 
+To synchronize all data in the directory just created you need to do this command:
+\begin{lstlisting}
+# mount -t nfs4 10.0.0.100:/home/USERNAME/EAP-HOME/bin/data /home/USERNAME/EAP-HOME/bin/data
+\end{lstlisting}
+NB this command must be done every time after the slave servers reboot, so it can be useful making a bash script or adding to the jboss launcher script.
+
+\subsubsection{Migrating Trouble}
+Till now the migration process with JBoss active due two a lack of ram or maybe lack of knowledge won't work properly.\\
+Sometimes the Master migrate form a machine to another but not allways.\\
+Further research must be done in this way.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\section{Credits}
+\subsection{Donation}
+Give us your support by donating on paypal here:
+\url{http://tinyurl.com/pq72tsn}
+
+\section{GNU Free Documentation License}
+\begin{scriptsize}
+
+                GNU Free Documentation License
+                 Version 1.3, 3 November 2008
+
+
+ Copyright (C) 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+     <http://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+0. PREAMBLE
+
+The purpose of this License is to make a manual, textbook, or other
+functional and useful document "free" in the sense of freedom: to
+assure everyone the effective freedom to copy and redistribute it,
+with or without modifying it, either commercially or noncommercially.
+Secondarily, this License preserves for the author and publisher a way
+to get credit for their work, while not being considered responsible
+for modifications made by others.
+
+This License is a kind of "copyleft", which means that derivative
+works of the document must themselves be free in the same sense.  It
+complements the GNU General Public License, which is a copyleft
+license designed for free software.
+
+We have designed this License in order to use it for manuals for free
+software, because free software needs free documentation: a free
+program should come with manuals providing the same freedoms that the
+software does.  But this License is not limited to software manuals;
+it can be used for any textual work, regardless of subject matter or
+whether it is published as a printed book.  We recommend this License
+principally for works whose purpose is instruction or reference.
+
+
+1. APPLICABILITY AND DEFINITIONS
+
+This License applies to any manual or other work, in any medium, that
+contains a notice placed by the copyright holder saying it can be
+distributed under the terms of this License.  Such a notice grants a
+world-wide, royalty-free license, unlimited in duration, to use that
+work under the conditions stated herein.  The "Document", below,
+refers to any such manual or work.  Any member of the public is a
+licensee, and is addressed as "you".  You accept the license if you
+copy, modify or distribute the work in a way requiring permission
+under copyright law.
+
+A "Modified Version" of the Document means any work containing the
+Document or a portion of it, either copied verbatim, or with
+modifications and/or translated into another language.
+
+A "Secondary Section" is a named appendix or a front-matter section of
+the Document that deals exclusively with the relationship of the
+publishers or authors of the Document to the Document's overall
+subject (or to related matters) and contains nothing that could fall
+directly within that overall subject.  (Thus, if the Document is in
+part a textbook of mathematics, a Secondary Section may not explain
+any mathematics.)  The relationship could be a matter of historical
+connection with the subject or with related matters, or of legal,
+commercial, philosophical, ethical or political position regarding
+them.
+
+The "Invariant Sections" are certain Secondary Sections whose titles
+are designated, as being those of Invariant Sections, in the notice
+that says that the Document is released under this License.  If a
+section does not fit the above definition of Secondary then it is not
+allowed to be designated as Invariant.  The Document may contain zero
+Invariant Sections.  If the Document does not identify any Invariant
+Sections then there are none.
+
+The "Cover Texts" are certain short passages of text that are listed,
+as Front-Cover Texts or Back-Cover Texts, in the notice that says that
+the Document is released under this License.  A Front-Cover Text may
+be at most 5 words, and a Back-Cover Text may be at most 25 words.
+
+A "Transparent" copy of the Document means a machine-readable copy,
+represented in a format whose specification is available to the
+general public, that is suitable for revising the document
+straightforwardly with generic text editors or (for images composed of
+pixels) generic paint programs or (for drawings) some widely available
+drawing editor, and that is suitable for input to text formatters or
+for automatic translation to a variety of formats suitable for input
+to text formatters.  A copy made in an otherwise Transparent file
+format whose markup, or absence of markup, has been arranged to thwart
+or discourage subsequent modification by readers is not Transparent.
+An image format is not Transparent if used for any substantial amount
+of text.  A copy that is not "Transparent" is called "Opaque".
+
+Examples of suitable formats for Transparent copies include plain
+ASCII without markup, Texinfo input format, LaTeX input format, SGML
+or XML using a publicly available DTD, and standard-conforming simple
+HTML, PostScript or PDF designed for human modification.  Examples of
+transparent image formats include PNG, XCF and JPG.  Opaque formats
+include proprietary formats that can be read and edited only by
+proprietary word processors, SGML or XML for which the DTD and/or
+processing tools are not generally available, and the
+machine-generated HTML, PostScript or PDF produced by some word
+processors for output purposes only.
+
+The "Title Page" means, for a printed book, the title page itself,
+plus such following pages as are needed to hold, legibly, the material
+this License requires to appear in the title page.  For works in
+formats which do not have any title page as such, "Title Page" means
+the text near the most prominent appearance of the work's title,
+preceding the beginning of the body of the text.
+
+The "publisher" means any person or entity that distributes copies of
+the Document to the public.
+
+A section "Entitled XYZ" means a named subunit of the Document whose
+title either is precisely XYZ or contains XYZ in parentheses following
+text that translates XYZ in another language.  (Here XYZ stands for a
+specific section name mentioned below, such as "Acknowledgements",
+"Dedications", "Endorsements", or "History".)  To "Preserve the Title"
+of such a section when you modify the Document means that it remains a
+section "Entitled XYZ" according to this definition.
+
+The Document may include Warranty Disclaimers next to the notice which
+states that this License applies to the Document.  These Warranty
+Disclaimers are considered to be included by reference in this
+License, but only as regards disclaiming warranties: any other
+implication that these Warranty Disclaimers may have is void and has
+no effect on the meaning of this License.
+
+2. VERBATIM COPYING
+
+You may copy and distribute the Document in any medium, either
+commercially or noncommercially, provided that this License, the
+copyright notices, and the license notice saying this License applies
+to the Document are reproduced in all copies, and that you add no
+other conditions whatsoever to those of this License.  You may not use
+technical measures to obstruct or control the reading or further
+copying of the copies you make or distribute.  However, you may accept
+compensation in exchange for copies.  If you distribute a large enough
+number of copies you must also follow the conditions in section 3.
+
+You may also lend copies, under the same conditions stated above, and
+you may publicly display copies.
+
+
+3. COPYING IN QUANTITY
+
+If you publish printed copies (or copies in media that commonly have
+printed covers) of the Document, numbering more than 100, and the
+Document's license notice requires Cover Texts, you must enclose the
+copies in covers that carry, clearly and legibly, all these Cover
+Texts: Front-Cover Texts on the front cover, and Back-Cover Texts on
+the back cover.  Both covers must also clearly and legibly identify
+you as the publisher of these copies.  The front cover must present
+the full title with all words of the title equally prominent and
+visible.  You may add other material on the covers in addition.
+Copying with changes limited to the covers, as long as they preserve
+the title of the Document and satisfy these conditions, can be treated
+as verbatim copying in other respects.
+
+If the required texts for either cover are too voluminous to fit
+legibly, you should put the first ones listed (as many as fit
+reasonably) on the actual cover, and continue the rest onto adjacent
+pages.
+
+If you publish or distribute Opaque copies of the Document numbering
+more than 100, you must either include a machine-readable Transparent
+copy along with each Opaque copy, or state in or with each Opaque copy
+a computer-network location from which the general network-using
+public has access to download using public-standard network protocols
+a complete Transparent copy of the Document, free of added material.
+If you use the latter option, you must take reasonably prudent steps,
+when you begin distribution of Opaque copies in quantity, to ensure
+that this Transparent copy will remain thus accessible at the stated
+location until at least one year after the last time you distribute an
+Opaque copy (directly or through your agents or retailers) of that
+edition to the public.
+
+It is requested, but not required, that you contact the authors of the
+Document well before redistributing any large number of copies, to
+give them a chance to provide you with an updated version of the
+Document.
+
+
+4. MODIFICATIONS
+
+You may copy and distribute a Modified Version of the Document under
+the conditions of sections 2 and 3 above, provided that you release
+the Modified Version under precisely this License, with the Modified
+Version filling the role of the Document, thus licensing distribution
+and modification of the Modified Version to whoever possesses a copy
+of it.  In addition, you must do these things in the Modified Version:
+
+A. Use in the Title Page (and on the covers, if any) a title distinct
+   from that of the Document, and from those of previous versions
+   (which should, if there were any, be listed in the History section
+   of the Document).  You may use the same title as a previous version
+   if the original publisher of that version gives permission.
+B. List on the Title Page, as authors, one or more persons or entities
+   responsible for authorship of the modifications in the Modified
+   Version, together with at least five of the principal authors of the
+   Document (all of its principal authors, if it has fewer than five),
+   unless they release you from this requirement.
+C. State on the Title page the name of the publisher of the
+   Modified Version, as the publisher.
+D. Preserve all the copyright notices of the Document.
+E. Add an appropriate copyright notice for your modifications
+   adjacent to the other copyright notices.
+F. Include, immediately after the copyright notices, a license notice
+   giving the public permission to use the Modified Version under the
+   terms of this License, in the form shown in the Addendum below.
+G. Preserve in that license notice the full lists of Invariant Sections
+   and required Cover Texts given in the Document's license notice.
+H. Include an unaltered copy of this License.
+I. Preserve the section Entitled "History", Preserve its Title, and add
+   to it an item stating at least the title, year, new authors, and
+   publisher of the Modified Version as given on the Title Page.  If
+   there is no section Entitled "History" in the Document, create one
+   stating the title, year, authors, and publisher of the Document as
+   given on its Title Page, then add an item describing the Modified
+   Version as stated in the previous sentence.
+J. Preserve the network location, if any, given in the Document for
+   public access to a Transparent copy of the Document, and likewise
+   the network locations given in the Document for previous versions
+   it was based on.  These may be placed in the "History" section.
+   You may omit a network location for a work that was published at
+   least four years before the Document itself, or if the original
+   publisher of the version it refers to gives permission.
+K. For any section Entitled "Acknowledgements" or "Dedications",
+   Preserve the Title of the section, and preserve in the section all
+   the substance and tone of each of the contributor acknowledgements
+   and/or dedications given therein.
+L. Preserve all the Invariant Sections of the Document,
+   unaltered in their text and in their titles.  Section numbers
+   or the equivalent are not considered part of the section titles.
+M. Delete any section Entitled "Endorsements".  Such a section
+   may not be included in the Modified Version.
+N. Do not retitle any existing section to be Entitled "Endorsements"
+   or to conflict in title with any Invariant Section.
+O. Preserve any Warranty Disclaimers.
+
+If the Modified Version includes new front-matter sections or
+appendices that qualify as Secondary Sections and contain no material
+copied from the Document, you may at your option designate some or all
+of these sections as invariant.  To do this, add their titles to the
+list of Invariant Sections in the Modified Version's license notice.
+These titles must be distinct from any other section titles.
+
+You may add a section Entitled "Endorsements", provided it contains
+nothing but endorsements of your Modified Version by various
+parties--for example, statements of peer review or that the text has
+been approved by an organization as the authoritative definition of a
+standard.
+
+You may add a passage of up to five words as a Front-Cover Text, and a
+passage of up to 25 words as a Back-Cover Text, to the end of the list
+of Cover Texts in the Modified Version.  Only one passage of
+Front-Cover Text and one of Back-Cover Text may be added by (or
+through arrangements made by) any one entity.  If the Document already
+includes a cover text for the same cover, previously added by you or
+by arrangement made by the same entity you are acting on behalf of,
+you may not add another; but you may replace the old one, on explicit
+permission from the previous publisher that added the old one.
+
+The author(s) and publisher(s) of the Document do not by this License
+give permission to use their names for publicity for or to assert or
+imply endorsement of any Modified Version.
+
+
+5. COMBINING DOCUMENTS
+
+You may combine the Document with other documents released under this
+License, under the terms defined in section 4 above for modified
+versions, provided that you include in the combination all of the
+Invariant Sections of all of the original documents, unmodified, and
+list them all as Invariant Sections of your combined work in its
+license notice, and that you preserve all their Warranty Disclaimers.
+
+The combined work need only contain one copy of this License, and
+multiple identical Invariant Sections may be replaced with a single
+copy.  If there are multiple Invariant Sections with the same name but
+different contents, make the title of each such section unique by
+adding at the end of it, in parentheses, the name of the original
+author or publisher of that section if known, or else a unique number.
+Make the same adjustment to the section titles in the list of
+Invariant Sections in the license notice of the combined work.
+
+In the combination, you must combine any sections Entitled "History"
+in the various original documents, forming one section Entitled
+"History"; likewise combine any sections Entitled "Acknowledgements",
+and any sections Entitled "Dedications".  You must delete all sections
+Entitled "Endorsements".
+
+
+6. COLLECTIONS OF DOCUMENTS
+
+You may make a collection consisting of the Document and other
+documents released under this License, and replace the individual
+copies of this License in the various documents with a single copy
+that is included in the collection, provided that you follow the rules
+of this License for verbatim copying of each of the documents in all
+other respects.
+
+You may extract a single document from such a collection, and
+distribute it individually under this License, provided you insert a
+copy of this License into the extracted document, and follow this
+License in all other respects regarding verbatim copying of that
+document.
+
+
+7. AGGREGATION WITH INDEPENDENT WORKS
+
+A compilation of the Document or its derivatives with other separate
+and independent documents or works, in or on a volume of a storage or
+distribution medium, is called an "aggregate" if the copyright
+resulting from the compilation is not used to limit the legal rights
+of the compilation's users beyond what the individual works permit.
+When the Document is included in an aggregate, this License does not
+apply to the other works in the aggregate which are not themselves
+derivative works of the Document.
+
+If the Cover Text requirement of section 3 is applicable to these
+copies of the Document, then if the Document is less than one half of
+the entire aggregate, the Document's Cover Texts may be placed on
+covers that bracket the Document within the aggregate, or the
+electronic equivalent of covers if the Document is in electronic form.
+Otherwise they must appear on printed covers that bracket the whole
+aggregate.
+
+
+8. TRANSLATION
+
+Translation is considered a kind of modification, so you may
+distribute translations of the Document under the terms of section 4.
+Replacing Invariant Sections with translations requires special
+permission from their copyright holders, but you may include
+translations of some or all Invariant Sections in addition to the
+original versions of these Invariant Sections.  You may include a
+translation of this License, and all the license notices in the
+Document, and any Warranty Disclaimers, provided that you also include
+the original English version of this License and the original versions
+of those notices and disclaimers.  In case of a disagreement between
+the translation and the original version of this License or a notice
+or disclaimer, the original version will prevail.
+
+If a section in the Document is Entitled "Acknowledgements",
+"Dedications", or "History", the requirement (section 4) to Preserve
+its Title (section 1) will typically require changing the actual
+title.
+
+
+9. TERMINATION
+
+You may not copy, modify, sublicense, or distribute the Document
+except as expressly provided under this License.  Any attempt
+otherwise to copy, modify, sublicense, or distribute it is void, and
+will automatically terminate your rights under this License.
+
+However, if you cease all violation of this License, then your license
+from a particular copyright holder is reinstated (a) provisionally,
+unless and until the copyright holder explicitly and finally
+terminates your license, and (b) permanently, if the copyright holder
+fails to notify you of the violation by some reasonable means prior to
+60 days after the cessation.
+
+Moreover, your license from a particular copyright holder is
+reinstated permanently if the copyright holder notifies you of the
+violation by some reasonable means, this is the first time you have
+received notice of violation of this License (for any work) from that
+copyright holder, and you cure the violation prior to 30 days after
+your receipt of the notice.
+
+Termination of your rights under this section does not terminate the
+licenses of parties who have received copies or rights from you under
+this License.  If your rights have been terminated and not permanently
+reinstated, receipt of a copy of some or all of the same material does
+not give you any rights to use it.
+
+
+10. FUTURE REVISIONS OF THIS LICENSE
+
+The Free Software Foundation may publish new, revised versions of the
+GNU Free Documentation License from time to time.  Such new versions
+will be similar in spirit to the present version, but may differ in
+detail to address new problems or concerns.  See
+http://www.gnu.org/copyleft/.
+
+Each version of the License is given a distinguishing version number.
+If the Document specifies that a particular numbered version of this
+License "or any later version" applies to it, you have the option of
+following the terms and conditions either of that specified version or
+of any later version that has been published (not as a draft) by the
+Free Software Foundation.  If the Document does not specify a version
+number of this License, you may choose any version ever published (not
+as a draft) by the Free Software Foundation.  If the Document
+specifies that a proxy can decide which future versions of this
+License can be used, that proxy's public statement of acceptance of a
+version permanently authorizes you to choose that version for the
+Document.
+
+11. RELICENSING
+
+"Massive Multiauthor Collaboration Site" (or "MMC Site") means any
+World Wide Web server that publishes copyrightable works and also
+provides prominent facilities for anybody to edit those works.  A
+public wiki that anybody can edit is an example of such a server.  A
+"Massive Multiauthor Collaboration" (or "MMC") contained in the site
+means any set of copyrightable works thus published on the MMC site.
+
+"CC-BY-SA" means the Creative Commons Attribution-Share Alike 3.0 
+license published by Creative Commons Corporation, a not-for-profit 
+corporation with a principal place of business in San Francisco, 
+California, as well as future copyleft versions of that license 
+published by that same organization.
+
+"Incorporate" means to publish or republish a Document, in whole or in 
+part, as part of another Document.
+
+An MMC is "eligible for relicensing" if it is licensed under this 
+License, and if all works that were first published under this License 
+somewhere other than this MMC, and subsequently incorporated in whole or 
+in part into the MMC, (1) had no cover texts or invariant sections, and 
+(2) were thus incorporated prior to November 1, 2008.
+
+The operator of an MMC Site may republish an MMC contained in the site
+under CC-BY-SA on the same site at any time before August 1, 2009,
+provided the MMC is eligible for relicensing.
+
+
+ADDENDUM: How to use this License for your documents
+
+To use this License in a document you have written, include a copy of
+the License in the document and put the following copyright and
+license notices just after the title page:
+
+    Copyright (c)  YEAR  YOUR NAME.
+    Permission is granted to copy, distribute and/or modify this document
+    under the terms of the GNU Free Documentation License, Version 1.3
+    or any later version published by the Free Software Foundation;
+    with no Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
+    A copy of the license is included in the section entitled "GNU
+    Free Documentation License".
+
+If you have Invariant Sections, Front-Cover Texts and Back-Cover Texts,
+replace the "with...Texts." line with this:
+
+    with the Invariant Sections being LIST THEIR TITLES, with the
+    Front-Cover Texts being LIST, and with the Back-Cover Texts being LIST.
+
+If you have Invariant Sections without Cover Texts, or some other
+combination of the three, merge those two alternatives to suit the
+situation.
+
+If your document contains nontrivial examples of program code, we
+recommend releasing these examples in parallel under your choice of
+free software license, such as the GNU General Public License,
+to permit their use in free software.
+
+\end{scriptsize}
+
+\begin{thebibliography}{9}
+
+\bibitem{OpenNebulaInfo}
+  wikipedia
+\emph{https://en.wikipedia.org/wiki/OpenNebula}, 2014
+\bibitem{JBossInfo}
+  wikipedia
+\emph{https://en.wikipedia.org/wiki/JBoss}, 2014
+\bibitem{OpenNebulaOfficial}
+  OpenNebula
+\emph{http://docs.opennebula.org}, 2014
+\bibitem{JBossGuide}
+  RedHat
+\emph{http://tinyurl.com/kdf5ybb}, 2014
+\bibitem{ModClusterGuide}
+  Jboss ModCluster
+\emph{http://tinyurl.com/adgsbpw}, 2014
+
+
+\end{thebibliography}
+
+\end{document}
+
